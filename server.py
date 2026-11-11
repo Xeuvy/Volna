@@ -30,6 +30,7 @@ import uuid
 import webbrowser
 from collections import Counter
 from datetime import datetime, timezone
+from email.utils import formatdate
 from html import escape as html_escape
 from http import HTTPStatus
 from http.cookies import SimpleCookie
@@ -41,7 +42,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 # Конфигурация
 # --------------------------------------------------------------------------
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -515,10 +516,14 @@ def session_info(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def session_cookie_header(token: str) -> str:
+def session_cookie_header(token: str, expires_at: float | None = None) -> str:
+    expires = formatdate(
+        expires_at if expires_at is not None else time.time() + SESSION_TTL,
+        usegmt=True,
+    )
     return (
         f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; "
-        f"Max-Age={SESSION_TTL}"
+        f"Max-Age={SESSION_TTL}; Expires={expires}"
     )
 
 
@@ -699,7 +704,7 @@ class VolnaHandler(BaseHTTPRequestHandler):
         token, payload = build_session(self.secret, user)
         self._session_checked = True
         self._session_result = (user, payload)
-        return session_cookie_header(token), payload
+        return session_cookie_header(token, payload["e"]), payload
 
     def clear_session(self) -> None:
         self._session_checked = True
@@ -1252,7 +1257,13 @@ class VolnaHandler(BaseHTTPRequestHandler):
             self.db.data["tracks"][track_id] = track
             self.db.save()
 
-        self.send_json(201, {"track": public_track(self.db, track, user["id"], 0)})
+        # Загрузка не должна ронять сессию: обновляем cookie в ответе.
+        cookie, _ = self.issue_session(user)
+        self.send_json(
+            201,
+            {"track": public_track(self.db, track, user["id"], 0)},
+            cookie=cookie,
+        )
 
     def api_update_track(self, track_id: str) -> None:
         user = self.require_user()

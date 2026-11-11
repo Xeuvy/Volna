@@ -1284,7 +1284,9 @@ async function handleUpload(event) {
       $("#uploadForm").reset();
       resetUploadUI();
       await ensureTracks(true);
-      await loadMe().catch(() => {});
+      if (state.user) {
+        state.user.tracks_count = (state.user.tracks_count || 0) + 1;
+      }
       navigate(trackPath(data.track.id));
       toast("Трек опубликован — можно слушать", "success");
     } else {
