@@ -11,6 +11,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0-2ea44f)](https://github.com/Xeuvy/Volna)
 [![License](https://img.shields.io/badge/license-MIT-8b5cf6)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/Xeuvy/Volna?label=release&color=6d28d9)](https://github.com/Xeuvy/Volna/releases)
 [![GitHub](https://img.shields.io/badge/GitHub-Xeuvy%2FVolna-181717?logo=github)](https://github.com/Xeuvy/Volna)
 
 [Смотреть репозиторий](https://github.com/Xeuvy/Volna) · [Быстрый старт](#быстрый-старт) · [API](#api)
@@ -191,6 +192,9 @@ python3 server.py --host 0.0.0.0 --port 8000
 
 ```text
 Volna/
+├── .github/workflows/
+│   ├── ci.yml             # проверка синтаксиса и smoke-тест
+│   └── release.yml        # автоматический GitHub Release по тегу v*
 ├── server.py              # сервер, API, JSON-база, сессии, раздача файлов
 ├── README.md
 ├── LICENSE
@@ -386,8 +390,9 @@ python3 -m py_compile server.py
 node --check static/app.js
 ```
 
-- В репозитории настроен GitHub Actions workflow, который проверяет синтаксис
-  Python и JavaScript при push и pull request.
+- В репозитории настроены два GitHub Actions workflow:
+  - `ci.yml` — проверка синтаксиса Python/JavaScript и smoke-тест сервера;
+  - `release.yml` — автоматическая публикация GitHub Release по тегу `v*`.
 - `data/db.json` и загруженные файлы намеренно исключены из Git.
 
 ## Roadmap
@@ -401,6 +406,21 @@ node --check static/app.js
 - OAuth / восстановление пароля;
 - Docker-образ и публичный деплой за reverse proxy;
 - автоматические интеграционные тесты API.
+
+## Версии и релизы
+
+Текущая версия — **v1.1**. Релизы и сгенерированные списки изменений доступны
+на [GitHub Releases](https://github.com/Xeuvy/Volna/releases).
+
+Чтобы выпустить следующую версию, достаточно создать и запушить тег:
+
+```bash
+git tag -a v1.2 -m "Волна v1.2"
+git push origin v1.2
+```
+
+Workflow `release.yml` сам создаст релиз, приложит автоматические release notes
+и отметит его как latest.
 
 ## Лицензия
 
