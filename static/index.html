@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#070812">
   <meta name="description" content="Волна — локальный аудио-хостинг: слушайте и скачивайте треки без регистрации, загружайте свои.">
+  <meta property="og:title" content="Волна — аудио без границ">
+  <meta property="og:description" content="Слушайте треки без регистрации, скачивайте бесплатно и делитесь своими звуками.">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Волна">
+  <meta name="twitter:card" content="summary">
   <title>Волна — аудио без границ</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/styles.css">
@@ -18,7 +23,7 @@
 
   <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="#home" data-view-link="home" aria-label="Волна — на главную">
+      <a class="brand" href="/" data-link data-nav="home" aria-label="Волна — на главную">
         <span class="brand-mark" aria-hidden="true">
           <svg viewBox="0 0 32 32" width="28" height="28">
             <rect x="2" y="12" width="3.4" height="8" rx="1.7" fill="currentColor"></rect>
@@ -32,9 +37,9 @@
       </a>
 
       <nav class="main-nav" aria-label="Основная навигация">
-        <button class="nav-link is-active" data-view-link="home" type="button">Лента</button>
-        <button class="nav-link" data-view-link="upload" type="button">Загрузить</button>
-        <button class="nav-link" data-view-link="account" type="button">Кабинет</button>
+        <a class="nav-link is-active" href="/" data-link data-nav="home">Лента</a>
+        <a class="nav-link" href="/upload" data-link data-nav="upload">Загрузить</a>
+        <a class="nav-link" href="/account" data-link data-nav="account">Кабинет</a>
       </nav>
 
       <div class="auth-area" id="authArea">
@@ -186,13 +191,6 @@
           </div>
         </div>
 
-        <div class="filter-row" id="filterRow" hidden>
-          <span class="filter-chip" id="authorFilterChip">
-            Автор: <strong id="authorFilterName"></strong>
-            <button type="button" id="clearAuthorFilter" aria-label="Сбросить фильтр">✕</button>
-          </span>
-        </div>
-
         <div class="track-grid" id="trackGrid" aria-live="polite"></div>
 
         <div class="empty-state" id="emptyState" hidden>
@@ -202,6 +200,44 @@
           <button class="btn btn-primary" data-action="go-upload" type="button">Загрузить трек</button>
         </div>
       </section>
+    </section>
+
+    <!-- ============================ СТРАНИЦА ТРЕКА ============================ -->
+    <section class="view" id="view-track" hidden>
+      <div class="subpage-head">
+        <a class="back-link" href="/" data-link>
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          В ленту
+        </a>
+        <span class="subpage-hint">Страница трека</span>
+      </div>
+      <div class="track-detail" id="trackDetail" aria-live="polite">
+        <div class="page-loader">Загружаю трек…</div>
+      </div>
+    </section>
+
+    <!-- ============================ ПРОФИЛЬ АВТОРА ============================ -->
+    <section class="view" id="view-user" hidden>
+      <div class="subpage-head">
+        <a class="back-link" href="/" data-link>
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          В ленту
+        </a>
+        <span class="subpage-hint">Профиль автора</span>
+      </div>
+      <div id="userProfile" aria-live="polite">
+        <div class="page-loader">Загружаю профиль…</div>
+      </div>
+    </section>
+
+    <!-- ============================ 404 ============================ -->
+    <section class="view" id="view-notfound" hidden>
+      <div class="not-found card">
+        <div class="not-found-code">404</div>
+        <h1>Здесь ничего нет</h1>
+        <p>Страница не найдена, удалена или ссылка устарела.</p>
+        <a class="btn btn-primary" href="/" data-link>Вернуться в ленту</a>
+      </div>
     </section>
 
     <!-- ============================ ЗАГРУЗКА ============================ -->
@@ -279,7 +315,7 @@
         <div>
           <p class="eyebrow">Личное пространство</p>
           <h1>Настройки аккаунта</h1>
-          <p class="muted">Профиль, доступ, пароль и ваши загруженные треки.</p>
+          <p class="muted">Профиль, cookie-сессия, лайки, комментарии и ваши треки.</p>
         </div>
       </div>
 
@@ -290,12 +326,15 @@
             <h2 id="accountDisplayName">—</h2>
             <p class="handle" id="accountUsername">@—</p>
             <p class="bio-preview" id="accountBio">—</p>
-            <div class="profile-stats">
+            <div class="profile-stats profile-stats-4">
               <div><strong id="accountTracks">0</strong><span id="accountTracksLabel">треков</span></div>
               <div><strong id="accountPlays">0</strong><span id="accountPlaysLabel">прослушиваний</span></div>
-              <div><strong id="accountDownloads">0</strong><span id="accountDownloadsLabel">скачиваний</span></div>
+              <div><strong id="accountLikes">0</strong><span id="accountLikesLabel">лайков</span></div>
+              <div><strong id="accountComments">0</strong><span id="accountCommentsLabel">комментариев</span></div>
             </div>
+            <p class="mini-stats-line" id="accountDownloadsLine"></p>
             <p class="joined" id="accountJoined"></p>
+            <a class="btn btn-ghost btn-sm btn-block" id="publicProfileLink" href="#" data-link>Публичный профиль</a>
             <button class="btn btn-ghost btn-sm btn-block" id="logoutBtn" type="button">Выйти из аккаунта</button>
           </div>
         </aside>
@@ -407,12 +446,47 @@
             </form>
           </section>
 
+          <section class="card settings-card session-card">
+            <div class="card-head">
+              <h2>Сессия</h2>
+              <p class="muted">Вход хранится в подписанной HttpOnly-cookie, а не в базе данных.</p>
+            </div>
+            <div class="session-row">
+              <span class="session-pill">Cookie · 30 дней</span>
+              <span class="muted">Действует до <strong id="sessionExpires">—</strong></span>
+            </div>
+            <p class="field-hint" id="lastLoginLine"></p>
+            <div class="form-actions">
+              <button class="btn btn-ghost" id="logoutAllBtn" type="button">Завершить все другие сеансы</button>
+            </div>
+          </section>
+
           <section class="card settings-card">
             <div class="card-head">
               <h2>Мои треки</h2>
               <p class="muted">Переименовать, послушать или удалить загрузку.</p>
             </div>
             <div class="my-tracks" id="myTracks"></div>
+          </section>
+
+          <section class="card settings-card">
+            <div class="card-head">
+              <h2>Понравившиеся</h2>
+              <p class="muted">Треки, которым вы поставили ♥.</p>
+            </div>
+            <div class="activity-list" id="likedTracks">
+              <div class="empty-inline">Загружаю…</div>
+            </div>
+          </section>
+
+          <section class="card settings-card">
+            <div class="card-head">
+              <h2>Мои комментарии</h2>
+              <p class="muted">Ваши отзывы и ссылки на треки.</p>
+            </div>
+            <div class="activity-list" id="myComments">
+              <div class="empty-inline">Загружаю…</div>
+            </div>
           </section>
 
           <section class="card settings-card danger-card">
@@ -437,6 +511,8 @@
 
   <footer class="footer">
     <span>Волна · локальный аудио-хостинг</span>
+    <span class="footer-sep">·</span>
+    <span>v2.1</span>
     <span class="footer-sep">·</span>
     <span>Данные хранятся в <code>data/db.json</code></span>
   </footer>

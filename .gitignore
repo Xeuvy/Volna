@@ -12,6 +12,8 @@ __pycache__/
 
 # Пользовательские данные
 data/db.json
+data/secret.key
+data/*.key
 data/uploads/*
 !data/uploads/.gitkeep
 

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import hmac
 import json
@@ -27,7 +28,9 @@ import traceback
 import unicodedata
 import uuid
 import webbrowser
+from collections import Counter
 from datetime import datetime, timezone
+from html import escape as html_escape
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,15 +41,20 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 # Конфигурация
 # --------------------------------------------------------------------------
 
+VERSION = "2.1.0"
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 DB_PATH = os.path.join(DATA_DIR, "db.json")
+SECRET_PATH = os.path.join(DATA_DIR, "secret.key")
 
 MAX_UPLOAD_BYTES = 80 * 1024 * 1024          # 80 МБ на файл
 MAX_JSON_BYTES = 256 * 1024                  # тела JSON-запросов
+MAX_COMMENT_LEN = 1000
 SESSION_TTL = 30 * 24 * 60 * 60              # 30 дней
+SESSION_COOKIE = "session"
 PBKDF2_ITERATIONS = 240_000
 
 AUDIO_TYPES = {
@@ -76,6 +84,27 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def iso_from_ts(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat(timespec="seconds")
+
+
+def load_or_create_secret(path: str) -> bytes:
+    """Ключ подписи cookie-сессий. Создаётся один раз и не попадает в Git."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        with open(path, "rb") as fh:
+            secret = fh.read()
+        if len(secret) >= 32:
+            return secret
+    except FileNotFoundError:
+        pass
+    secret = secrets.token_bytes(32)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(secret)
+    return secret
+
+
 class ApiError(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(message)
@@ -97,10 +126,10 @@ class Database:
 
     def _empty(self) -> dict[str, Any]:
         return {
-            "meta": {"version": 1, "created_at": now_iso()},
+            "meta": {"version": 2, "created_at": now_iso()},
             "users": {},
-            "sessions": {},
             "tracks": {},
+            "comments": {},
         }
 
     def _load(self) -> dict[str, Any]:
@@ -122,14 +151,34 @@ class Database:
             data = self._empty()
             self._write(data)
             return data
-        for key, default in (("users", {}), ("sessions", {}), ("tracks", {}), ("meta", {})):
-            data.setdefault(key, default)
+        changed = False
+        if "sessions" in data:
+            data.pop("sessions")
+            changed = True
+        for key, default in (("users", {}), ("tracks", {}), ("comments", {}), ("meta", {})):
+            if key not in data:
+                data[key] = default
+                changed = True
+        if data["meta"].get("version") != 2:
+            data["meta"]["version"] = 2
+            changed = True
+        data["meta"].setdefault("created_at", now_iso())
+        for user in data["users"].values():
+            if "session_version" not in user:
+                user["session_version"] = 0
+                changed = True
+        for track in data["tracks"].values():
+            if "likes" not in track:
+                track["likes"] = []
+                changed = True
+        if changed:
+            self._write(data)
         return data
 
     def _write(self, data: dict[str, Any]) -> None:
         tmp = f"{self.path}.tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, indent=2)
+            json.dump(data, fh, ensure_ascii=False, separators=(",", ":"))
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, self.path)
@@ -137,18 +186,6 @@ class Database:
     def save(self) -> None:
         with self.lock:
             self._write(self.data)
-
-    def cleanup_sessions(self) -> None:
-        with self.lock:
-            now = time.time()
-            expired = [
-                token for token, sess in self.data["sessions"].items()
-                if float(sess.get("expires_at", 0)) <= now
-            ]
-            for token in expired:
-                del self.data["sessions"][token]
-            if expired:
-                self.save()
 
 
 # --------------------------------------------------------------------------
@@ -198,19 +235,65 @@ def user_public(db: Database, user: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def comment_counts(db: Database) -> Counter:
+    counts: Counter = Counter()
+    for comment in db.data["comments"].values():
+        counts[comment.get("track_id")] += 1
+    return counts
+
+
+def comment_count_for_track(db: Database, track_id: str) -> int:
+    return sum(1 for c in db.data["comments"].values() if c.get("track_id") == track_id)
+
+
+def profile_stats(db: Database, user: dict[str, Any]) -> dict[str, int]:
+    tracks = user_tracks(db, user["id"])
+    track_ids = {track["id"] for track in tracks}
+    return {
+        "tracks": len(tracks),
+        "plays": sum(int(t.get("plays", 0)) for t in tracks),
+        "downloads": sum(int(t.get("downloads", 0)) for t in tracks),
+        "likes": sum(len(t.get("likes", [])) for t in tracks),
+        "comments": sum(
+            1 for comment in db.data["comments"].values()
+            if comment.get("track_id") in track_ids
+        ),
+    }
+
+
 def user_private(db: Database, user: dict[str, Any]) -> dict[str, Any]:
     payload = user_public(db, user)
     tracks = user_tracks(db, user["id"])
+    track_ids = {track["id"] for track in tracks}
     payload.update({
         "email": user.get("email") or "",
         "tracks_count": len(tracks),
         "plays_total": sum(int(t.get("plays", 0)) for t in tracks),
         "downloads_total": sum(int(t.get("downloads", 0)) for t in tracks),
+        "likes_received": sum(len(t.get("likes", [])) for t in tracks),
+        "comments_received": sum(
+            1 for comment in db.data["comments"].values()
+            if comment.get("track_id") in track_ids
+        ),
+        "last_login_at": user.get("last_login_at"),
+        "likes_given": sum(
+            1 for track in db.data["tracks"].values()
+            if user["id"] in track.get("likes", [])
+        ),
+        "comments_written": sum(
+            1 for comment in db.data["comments"].values()
+            if comment.get("user_id") == user["id"]
+        ),
     })
     return payload
 
 
-def public_track(db: Database, track: dict[str, Any], viewer_id: str | None) -> dict[str, Any]:
+def public_track(
+    db: Database,
+    track: dict[str, Any],
+    viewer_id: str | None,
+    comment_count: int | None = None,
+) -> dict[str, Any]:
     author = db.data["users"].get(track["user_id"])
     author_payload = user_public(db, author) if author else {
         "id": None,
@@ -221,6 +304,7 @@ def public_track(db: Database, track: dict[str, Any], viewer_id: str | None) -> 
         "bio": "",
         "created_at": None,
     }
+    likes = track.get("likes", [])
     return {
         "id": track["id"],
         "title": track["title"],
@@ -231,8 +315,45 @@ def public_track(db: Database, track: dict[str, Any], viewer_id: str | None) -> 
         "ext": track.get("ext") or ".mp3",
         "plays": int(track.get("plays", 0)),
         "downloads": int(track.get("downloads", 0)),
+        "likes": len(likes),
+        "liked": bool(viewer_id and viewer_id in likes),
+        "comment_count": (
+            int(comment_count) if comment_count is not None
+            else comment_count_for_track(db, track["id"])
+        ),
         "author": author_payload,
         "mine": bool(viewer_id and track["user_id"] == viewer_id),
+    }
+
+
+def public_comment(
+    db: Database,
+    comment: dict[str, Any],
+    viewer_id: str | None,
+    track_owner_id: str | None,
+) -> dict[str, Any]:
+    author = db.data["users"].get(comment.get("user_id"))
+    author_payload = user_public(db, author) if author else {
+        "id": None,
+        "username": "deleted",
+        "display_name": "Удалённый пользователь",
+        "avatar": "👻",
+        "accent": "#6b7280",
+        "bio": "",
+        "created_at": None,
+    }
+    return {
+        "id": comment["id"],
+        "text": comment.get("text", ""),
+        "created_at": comment.get("created_at"),
+        "author": author_payload,
+        "mine": bool(viewer_id and viewer_id == comment.get("user_id")),
+        "can_delete": bool(
+            viewer_id and (
+                viewer_id == comment.get("user_id")
+                or viewer_id == track_owner_id
+            )
+        ),
     }
 
 
@@ -336,14 +457,88 @@ def parse_multipart(body: bytes, boundary: bytes) -> tuple[dict[str, str], dict[
 
 
 # --------------------------------------------------------------------------
+# Cookie-сессии
+# --------------------------------------------------------------------------
+
+def b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def b64url_decode(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def build_session(secret: bytes, user: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    now = int(time.time())
+    payload = {
+        "u": user["id"],
+        "v": int(user.get("session_version", 0)),
+        "i": now,
+        "e": now + SESSION_TTL,
+    }
+    body = b64url_encode(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
+    signature = b64url_encode(
+        hmac.new(secret, body.encode("ascii"), hashlib.sha256).digest()
+    )
+    return f"v1.{body}.{signature}", payload
+
+
+def verify_session(secret: bytes, value: str) -> dict[str, Any] | None:
+    try:
+        version, body, signature = value.split(".")
+        if version != "v1":
+            return None
+        expected = b64url_encode(
+            hmac.new(secret, body.encode("ascii"), hashlib.sha256).digest()
+        )
+        if not hmac.compare_digest(signature, expected):
+            return None
+        payload = json.loads(b64url_decode(body).decode("utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        if int(payload.get("e", 0)) <= int(time.time()):
+            return None
+        if not isinstance(payload.get("u"), str):
+            return None
+        return payload
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+
+def session_info(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "cookie",
+        "issued_at": iso_from_ts(int(payload.get("i", 0))),
+        "expires_at": iso_from_ts(int(payload.get("e", 0))),
+    }
+
+
+def session_cookie_header(token: str) -> str:
+    return (
+        f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; "
+        f"Max-Age={SESSION_TTL}"
+    )
+
+
+def clear_session_cookie_header() -> str:
+    return (
+        f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; "
+        "Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT"
+    )
+
+
+# --------------------------------------------------------------------------
 # HTTP-сервер
 # --------------------------------------------------------------------------
 
 class VolnaHandler(BaseHTTPRequestHandler):
-    server_version = "Volna/1.0"
+    server_version = f"Volna/{VERSION}"
     protocol_version = "HTTP/1.1"
 
     db: Database = None  # type: ignore[assignment]
+    secret: bytes = b""
 
     # -- служебное ---------------------------------------------------------
 
@@ -394,12 +589,22 @@ class VolnaHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def send_json(self, status: int, payload: dict[str, Any]) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    def send_json(
+        self,
+        status: int,
+        payload: dict[str, Any],
+        *,
+        cookie: str | None = None,
+    ) -> None:
+        body = json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
         self._common_headers()
         self.end_headers()
         if not getattr(self, "_head_only", False):
@@ -450,7 +655,7 @@ class VolnaHandler(BaseHTTPRequestHandler):
 
     # -- сессии ------------------------------------------------------------
 
-    def _session_token(self) -> str | None:
+    def _cookie_value(self, name: str) -> str | None:
         raw = self.headers.get("Cookie")
         if not raw:
             return None
@@ -458,23 +663,31 @@ class VolnaHandler(BaseHTTPRequestHandler):
             cookie = SimpleCookie(raw)
         except Exception:
             return None
-        morsel = cookie.get("session")
+        morsel = cookie.get(name)
         return morsel.value if morsel else None
 
-    def current_user(self) -> dict[str, Any] | None:
-        token = self._session_token()
+    def current_session(self) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        if getattr(self, "_session_checked", False):
+            return self._session_result
+        self._session_checked = True
+        self._session_result = None
+        token = self._cookie_value(SESSION_COOKIE)
         if not token:
             return None
-        session = self.db.data["sessions"].get(token)
-        if not session:
+        payload = verify_session(self.secret, token)
+        if not payload:
             return None
-        if float(session.get("expires_at", 0)) <= time.time():
-            with self.db.lock:
-                self.db.data["sessions"].pop(token, None)
-                self.db.save()
+        user = self.db.data["users"].get(payload.get("u"))
+        if not user:
             return None
-        user = self.db.data["users"].get(session["user_id"])
-        return user
+        if int(user.get("session_version", 0)) != int(payload.get("v", -1)):
+            return None
+        self._session_result = (user, payload)
+        return self._session_result
+
+    def current_user(self) -> dict[str, Any] | None:
+        session = self.current_session()
+        return session[0] if session else None
 
     def require_user(self) -> dict[str, Any]:
         user = self.current_user()
@@ -482,45 +695,52 @@ class VolnaHandler(BaseHTTPRequestHandler):
             raise ApiError(401, LOGIN_REQUIRED)
         return user
 
-    def start_session(self, user: dict[str, Any]) -> str:
-        token = secrets.token_urlsafe(32)
-        with self.db.lock:
-            self.db.data["sessions"][token] = {
-                "user_id": user["id"],
-                "created_at": now_iso(),
-                "expires_at": time.time() + SESSION_TTL,
-            }
-            self.db.save()
-        return token
+    def issue_session(self, user: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        token, payload = build_session(self.secret, user)
+        self._session_checked = True
+        self._session_result = (user, payload)
+        return session_cookie_header(token), payload
 
-    def session_cookie(self, token: str, *, clear: bool = False) -> None:
-        if clear:
-            self.send_header("Set-Cookie", "session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
-        else:
-            self.send_header(
-                "Set-Cookie",
-                f"session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_TTL}",
-            )
+    def clear_session(self) -> None:
+        self._session_checked = True
+        self._session_result = None
 
     # -- маршрутизация -----------------------------------------------------
 
     def _route(self, method: str) -> None:
         path = self.path_only
+        if path != "/" and path.endswith("/"):
+            path = path.rstrip("/")
 
         if method == "GET":
-            if path in ("/", "/index.html"):
+            if path in ("/", "/upload", "/account"):
+                return self.serve_spa(path)
+            if path == "/index.html":
                 return self.serve_static("index.html")
+            if re.match(r"^/track/[a-f0-9]+$", path):
+                return self.serve_spa(path)
+            if re.match(r"^/u/[^/]+$", path):
+                return self.serve_spa(path)
             if path == "/health":
-                return self.send_json(200, {"ok": True, "time": now_iso()})
+                return self.send_json(200, {"ok": True, "version": VERSION, "time": now_iso()})
             if path.startswith("/static/"):
                 return self.serve_static(path[len("/static/"):])
             if path == "/favicon.ico":
                 return self.serve_static("favicon.svg")
             if path == "/api/me":
-                user = self.current_user()
-                return self.send_json(200, {"user": user_private(self.db, user) if user else None})
+                return self.api_me()
+            if path == "/api/me/likes":
+                return self.api_my_likes()
+            if path == "/api/me/comments":
+                return self.api_my_comments()
             if path == "/api/tracks":
                 return self.api_list_tracks()
+            m = re.match(r"^/api/users/([^/]+)$", path)
+            if m:
+                return self.api_user_profile(m.group(1))
+            m = re.match(r"^/api/tracks/([a-f0-9]+)$", path)
+            if m:
+                return self.api_track_detail(m.group(1))
             if path.startswith("/audio/"):
                 return self.api_stream_audio(path[len("/audio/"):])
             m = re.match(r"^/api/tracks/([a-f0-9]+)/download$", path)
@@ -535,13 +755,21 @@ class VolnaHandler(BaseHTTPRequestHandler):
                 return self.api_login()
             if path == "/api/logout":
                 return self.api_logout()
-            if path == "/api/tracks":
-                return self.api_upload_track()
+            if path == "/api/account/logout-all":
+                return self.api_logout_all()
             if path == "/api/account/delete":
                 return self.api_delete_account()
+            if path == "/api/tracks":
+                return self.api_upload_track()
             m = re.match(r"^/api/tracks/([a-f0-9]+)/play$", path)
             if m:
                 return self.api_play(m.group(1))
+            m = re.match(r"^/api/tracks/([a-f0-9]+)/like$", path)
+            if m:
+                return self.api_toggle_like(m.group(1))
+            m = re.match(r"^/api/tracks/([a-f0-9]+)/comments$", path)
+            if m:
+                return self.api_add_comment(m.group(1))
             raise ApiError(404, "Не найдено")
 
         if method == "PATCH":
@@ -558,6 +786,9 @@ class VolnaHandler(BaseHTTPRequestHandler):
             m = re.match(r"^/api/tracks/([a-f0-9]+)$", path)
             if m:
                 return self.api_delete_track(m.group(1))
+            m = re.match(r"^/api/comments/([a-f0-9]+)$", path)
+            if m:
+                return self.api_delete_comment(m.group(1))
             raise ApiError(404, "Не найдено")
 
         raise ApiError(405, "Метод не поддерживается")
@@ -571,6 +802,16 @@ class VolnaHandler(BaseHTTPRequestHandler):
         if not (full == root or full.startswith(root + os.sep)) or not os.path.isfile(full):
             raise ApiError(404, "Файл не найден")
 
+        stat = os.stat(full)
+        etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(HTTPStatus.NOT_MODIFIED)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
+            self._common_headers()
+            self.end_headers()
+            return
+
         ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
         if ctype.startswith("text/") or ctype in ("application/javascript", "image/svg+xml"):
             ctype += "; charset=utf-8"
@@ -580,6 +821,72 @@ class VolnaHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("ETag", etag)
+        self.send_header("Cache-Control", "no-cache")
+        self._common_headers()
+        self.end_headers()
+        if not getattr(self, "_head_only", False):
+            self.wfile.write(body)
+
+    @staticmethod
+    def _inject_meta(html: str, title: str, description: str, og_type: str) -> str:
+        safe_title = html_escape(title, quote=True)
+        safe_desc = html_escape(description, quote=True)
+        html = re.sub(r"<title>.*?</title>", f"<title>{safe_title}</title>",
+                      html, count=1, flags=re.S)
+        html = re.sub(r'<meta name="description" content="[^"]*">',
+                      f'<meta name="description" content="{safe_desc}">', html, count=1)
+        html = re.sub(r'<meta property="og:title" content="[^"]*">',
+                      f'<meta property="og:title" content="{safe_title}">', html, count=1)
+        html = re.sub(r'<meta property="og:description" content="[^"]*">',
+                      f'<meta property="og:description" content="{safe_desc}">', html, count=1)
+        html = re.sub(r'<meta property="og:type" content="[^"]*">',
+                      f'<meta property="og:type" content="{html_escape(og_type, quote=True)}">',
+                      html, count=1)
+        return html
+
+    def serve_spa(self, path: str) -> None:
+        index_path = os.path.join(STATIC_DIR, "index.html")
+        with open(index_path, "r", encoding="utf-8") as fh:
+            html = fh.read()
+
+        title = "Волна — аудио без границ"
+        description = (
+            "Локальный аудио-хостинг: слушайте и скачивайте треки без регистрации, "
+            "загружайте свои и общайтесь с авторами."
+        )
+        og_type = "website"
+
+        with self.db.lock:
+            track_match = re.match(r"^/track/([a-f0-9]+)$", path)
+            user_match = re.match(r"^/u/([^/]+)$", path)
+            if track_match:
+                track = self.db.data["tracks"].get(track_match.group(1))
+                if track:
+                    author = self.db.data["users"].get(track["user_id"])
+                    author_name = (author.get("display_name") if author else None) or "Волна"
+                    title = f"{track['title']} — {author_name} — Волна"
+                    description = (
+                        track.get("description")
+                        or f"Слушайте «{track['title']}» на Волне и скачивайте бесплатно."
+                    )[:180]
+                    og_type = "music.song"
+            elif user_match:
+                user = find_user_by_username(self.db, user_match.group(1))
+                if user:
+                    title = f"{user.get('display_name') or user['username']} (@{user['username']}) — Волна"
+                    description = (
+                        user.get("bio")
+                        or f"Профиль @{user['username']} на Волне: треки, лайки и комментарии."
+                    )[:180]
+                    og_type = "profile"
+
+        description = re.sub(r"\s+", " ", description).strip()
+        html = self._inject_meta(html, title, description, og_type)
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache")
         self._common_headers()
         self.end_headers()
@@ -587,6 +894,16 @@ class VolnaHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     # -- API: аккаунты -----------------------------------------------------
+
+    def api_me(self) -> None:
+        session = self.current_session()
+        if not session:
+            return self.send_json(200, {"user": None, "session": None})
+        user, payload = session
+        self.send_json(200, {
+            "user": user_private(self.db, user),
+            "session": session_info(payload),
+        })
 
     def api_register(self) -> None:
         payload = self.read_json()
@@ -611,22 +928,18 @@ class VolnaHandler(BaseHTTPRequestHandler):
                 "avatar": avatar,
                 "accent": "#8b5cf6",
                 "password_hash": hash_password(password),
+                "session_version": 0,
                 "created_at": now_iso(),
+                "last_login_at": now_iso(),
             }
             self.db.data["users"][user["id"]] = user
             self.db.save()
-            token = self.start_session(user)
 
-        self.send_response(201)
-        body = json.dumps({"user": user_private(self.db, user)}, ensure_ascii=False).encode("utf-8")
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.session_cookie(token)
-        self._common_headers()
-        self.end_headers()
-        if not getattr(self, "_head_only", False):
-            self.wfile.write(body)
+        cookie, session_payload = self.issue_session(user)
+        self.send_json(201, {
+            "user": user_private(self.db, user),
+            "session": session_info(session_payload),
+        }, cookie=cookie)
 
     def api_login(self) -> None:
         payload = self.read_json()
@@ -639,35 +952,29 @@ class VolnaHandler(BaseHTTPRequestHandler):
             user = find_user_by_username(self.db, username)
             if not user or not verify_password(password, user["password_hash"]):
                 raise ApiError(401, BAD_CREDENTIALS)
-            token = self.start_session(user)
+            user["last_login_at"] = now_iso()
+            self.db.save()
 
-        self.send_response(200)
-        body = json.dumps({"user": user_private(self.db, user)}, ensure_ascii=False).encode("utf-8")
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.session_cookie(token)
-        self._common_headers()
-        self.end_headers()
-        if not getattr(self, "_head_only", False):
-            self.wfile.write(body)
+        cookie, session_payload = self.issue_session(user)
+        self.send_json(200, {
+            "user": user_private(self.db, user),
+            "session": session_info(session_payload),
+        }, cookie=cookie)
 
     def api_logout(self) -> None:
-        token = self._session_token()
-        if token:
-            with self.db.lock:
-                self.db.data["sessions"].pop(token, None)
-                self.db.save()
-        body = b'{"ok": true}'
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.session_cookie("", clear=True)
-        self._common_headers()
-        self.end_headers()
-        if not getattr(self, "_head_only", False):
-            self.wfile.write(body)
+        self.clear_session()
+        self.send_json(200, {"ok": True}, cookie=clear_session_cookie_header())
+
+    def api_logout_all(self) -> None:
+        user = self.require_user()
+        with self.db.lock:
+            user["session_version"] = int(user.get("session_version", 0)) + 1
+            self.db.save()
+        cookie, payload = self.issue_session(user)
+        self.send_json(200, {
+            "ok": True,
+            "session": session_info(payload),
+        }, cookie=cookie)
 
     def api_update_account(self) -> None:
         user = self.require_user()
@@ -686,6 +993,8 @@ class VolnaHandler(BaseHTTPRequestHandler):
             ):
                 raise ApiError(403, "Текущий пароль неверен")
 
+        cookie = None
+        session_payload = None
         with self.db.lock:
             if wants_username:
                 existing = find_user_by_username(self.db, new_username)
@@ -715,16 +1024,18 @@ class VolnaHandler(BaseHTTPRequestHandler):
             if wants_password:
                 new_password = validate_password(payload.get("new_password"), field="Новый пароль")
                 user["password_hash"] = hash_password(new_password)
-                current_token = self._session_token()
-                for token in [
-                    t for t, sess in self.db.data["sessions"].items()
-                    if sess.get("user_id") == user["id"] and t != current_token
-                ]:
-                    del self.db.data["sessions"][token]
+                user["session_version"] = int(user.get("session_version", 0)) + 1
+                self.db.save()
+                cookie, session_payload = self.issue_session(user)
+            else:
+                self.db.save()
+                session = self.current_session()
+                session_payload = session[1] if session else None
 
-            self.db.save()
-
-        self.send_json(200, {"user": user_private(self.db, user)})
+        result = {"user": user_private(self.db, user)}
+        if session_payload:
+            result["session"] = session_info(session_payload)
+        self.send_json(200, result, cookie=cookie)
 
     def api_delete_account(self) -> None:
         user = self.require_user()
@@ -735,38 +1046,38 @@ class VolnaHandler(BaseHTTPRequestHandler):
 
         with self.db.lock:
             tracks = user_tracks(self.db, user["id"])
+            track_ids = {track["id"] for track in tracks}
             for track in tracks:
                 self._remove_track_file(track)
                 self.db.data["tracks"].pop(track["id"], None)
-            for token in [
-                t for t, sess in self.db.data["sessions"].items()
-                if sess.get("user_id") == user["id"]
-            ]:
-                del self.db.data["sessions"][token]
+            for comment_id, comment in list(self.db.data["comments"].items()):
+                if comment.get("user_id") == user["id"] or comment.get("track_id") in track_ids:
+                    del self.db.data["comments"][comment_id]
+            for track in self.db.data["tracks"].values():
+                likes = track.get("likes", [])
+                if user["id"] in likes:
+                    track["likes"] = [uid for uid in likes if uid != user["id"]]
             self.db.data["users"].pop(user["id"], None)
             self.db.save()
 
-        body = b'{"ok": true}'
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.session_cookie("", clear=True)
-        self._common_headers()
-        self.end_headers()
-        if not getattr(self, "_head_only", False):
-            self.wfile.write(body)
+        self.clear_session()
+        self.send_json(200, {"ok": True}, cookie=clear_session_cookie_header())
 
     # -- API: треки --------------------------------------------------------
 
     def api_list_tracks(self) -> None:
         viewer = self.current_user()
+        viewer_id = viewer["id"] if viewer else None
         query = (self.query.get("q", [""])[0] or "").strip().casefold()
         author = (self.query.get("author", [""])[0] or "").strip().casefold()
+        sort = (self.query.get("sort", ["new"])[0] or "new").lower()
 
         with self.db.lock:
-            tracks = [public_track(self.db, t, viewer["id"] if viewer else None)
-                      for t in self.db.data["tracks"].values()]
+            counts = comment_counts(self.db)
+            tracks = [
+                public_track(self.db, track, viewer_id, counts.get(track["id"], 0))
+                for track in self.db.data["tracks"].values()
+            ]
 
         if author:
             tracks = [t for t in tracks if t["author"]["username"].casefold() == author]
@@ -778,15 +1089,120 @@ class VolnaHandler(BaseHTTPRequestHandler):
                 or query in t["author"]["display_name"].casefold()
                 or query in t["author"]["username"].casefold()
             ]
-        tracks.sort(key=lambda t: t.get("created_at") or "", reverse=True)
+        if sort == "popular":
+            tracks.sort(key=lambda t: (t["plays"], t["likes"]), reverse=True)
+        elif sort == "discussed":
+            tracks.sort(key=lambda t: t["comment_count"], reverse=True)
+        else:
+            tracks.sort(key=lambda t: t.get("created_at") or "", reverse=True)
         self.send_json(200, {"tracks": tracks, "count": len(tracks)})
+
+    def api_track_detail(self, track_id: str) -> None:
+        session = self.current_session()
+        viewer = session[0] if session else None
+        viewer_id = viewer["id"] if viewer else None
+
+        with self.db.lock:
+            track = self.db.data["tracks"].get(track_id)
+            if not track:
+                raise ApiError(404, "Трек не найден")
+            comments = [
+                c for c in self.db.data["comments"].values()
+                if c.get("track_id") == track_id
+            ]
+            comments.sort(key=lambda c: c.get("created_at") or "", reverse=True)
+            counts = comment_counts(self.db)
+            payload = public_track(
+                self.db, track, viewer_id, counts.get(track_id, 0)
+            )
+            comment_payloads = [
+                public_comment(self.db, c, viewer_id, track["user_id"])
+                for c in comments
+            ]
+            related = [
+                t for t in self.db.data["tracks"].values()
+                if t["user_id"] == track["user_id"] and t["id"] != track_id
+            ]
+            related.sort(key=lambda t: t.get("created_at") or "", reverse=True)
+            related_payloads = [
+                public_track(self.db, t, viewer_id, counts.get(t["id"], 0))
+                for t in related[:4]
+            ]
+
+        self.send_json(200, {
+            "track": payload,
+            "comments": comment_payloads,
+            "related": related_payloads,
+            "viewer": {"authenticated": bool(viewer)},
+        })
+
+    def api_user_profile(self, username: str) -> None:
+        viewer = self.current_user()
+        viewer_id = viewer["id"] if viewer else None
+        with self.db.lock:
+            user = find_user_by_username(self.db, username)
+            if not user:
+                raise ApiError(404, "Пользователь не найден")
+            counts = comment_counts(self.db)
+            tracks = sorted(
+                user_tracks(self.db, user["id"]),
+                key=lambda t: t.get("created_at") or "",
+                reverse=True,
+            )
+            track_payloads = [
+                public_track(self.db, t, viewer_id, counts.get(t["id"], 0))
+                for t in tracks
+            ]
+            payload = user_public(self.db, user)
+            payload["stats"] = profile_stats(self.db, user)
+
+        payload["is_self"] = bool(viewer_id and viewer_id == user["id"])
+        self.send_json(200, {"user": payload, "tracks": track_payloads})
+
+    def api_my_likes(self) -> None:
+        user = self.require_user()
+        with self.db.lock:
+            counts = comment_counts(self.db)
+            tracks = [
+                t for t in self.db.data["tracks"].values()
+                if user["id"] in t.get("likes", [])
+            ]
+            tracks.sort(key=lambda t: t.get("created_at") or "", reverse=True)
+            payloads = [
+                public_track(self.db, t, user["id"], counts.get(t["id"], 0))
+                for t in tracks
+            ]
+        self.send_json(200, {"tracks": payloads})
+
+    def api_my_comments(self) -> None:
+        user = self.require_user()
+        with self.db.lock:
+            comments = [
+                c for c in self.db.data["comments"].values()
+                if c.get("user_id") == user["id"]
+            ]
+            comments.sort(key=lambda c: c.get("created_at") or "", reverse=True)
+            payloads = []
+            for comment in comments:
+                track = self.db.data["tracks"].get(comment.get("track_id"))
+                if not track:
+                    continue
+                item = public_comment(self.db, comment, user["id"], track["user_id"])
+                item["track"] = {
+                    "id": track["id"],
+                    "title": track["title"],
+                    "author": user_public(self.db, self.db.data["users"].get(track["user_id"]))
+                    if self.db.data["users"].get(track["user_id"]) else None,
+                }
+                payloads.append(item)
+        self.send_json(200, {"comments": payloads})
 
     def api_upload_track(self) -> None:
         user = self.require_user()
         content_type = self.headers.get("Content-Type", "")
         if "multipart/form-data" not in content_type.lower():
             raise ApiError(400, "Ожидалась форма с файлом (multipart/form-data)")
-        boundary_match = re.search(r"boundary=(?:\"([^\"]+)\"|([^;]+))", content_type)
+        boundary_match = re.search('boundary=(?:"([^"]+)"|([^;]+))', content_type)
         if not boundary_match:
             raise ApiError(400, "Не удалось определить boundary формы")
         boundary = (boundary_match.group(1) or boundary_match.group(2) or "").strip()
@@ -829,13 +1245,14 @@ class VolnaHandler(BaseHTTPRequestHandler):
             "size": len(upload["content"]),
             "plays": 0,
             "downloads": 0,
+            "likes": [],
             "created_at": now_iso(),
         }
         with self.db.lock:
             self.db.data["tracks"][track_id] = track
             self.db.save()
 
-        self.send_json(201, {"track": public_track(self.db, track, user["id"])})
+        self.send_json(201, {"track": public_track(self.db, track, user["id"], 0)})
 
     def api_update_track(self, track_id: str) -> None:
         user = self.require_user()
@@ -868,6 +1285,9 @@ class VolnaHandler(BaseHTTPRequestHandler):
                 raise ApiError(403, "Это не ваш трек")
             self._remove_track_file(track)
             del self.db.data["tracks"][track_id]
+            for comment_id, comment in list(self.db.data["comments"].items()):
+                if comment.get("track_id") == track_id:
+                    del self.db.data["comments"][comment_id]
             self.db.save()
         self.send_json(200, {"ok": True})
 
@@ -880,6 +1300,65 @@ class VolnaHandler(BaseHTTPRequestHandler):
             self.db.save()
             plays = track["plays"]
         self.send_json(200, {"plays": plays})
+
+    def api_toggle_like(self, track_id: str) -> None:
+        user = self.require_user()
+        with self.db.lock:
+            track = self.db.data["tracks"].get(track_id)
+            if not track:
+                raise ApiError(404, "Трек не найден")
+            likes = track.setdefault("likes", [])
+            if user["id"] in likes:
+                likes.remove(user["id"])
+                liked = False
+            else:
+                likes.append(user["id"])
+                liked = True
+            self.db.save()
+            like_count = len(likes)
+        self.send_json(200, {"liked": liked, "likes": like_count})
+
+    def api_add_comment(self, track_id: str) -> None:
+        user = self.require_user()
+        payload = self.read_json()
+        text = clean_text(
+            payload.get("text"), field="Комментарий",
+            max_len=MAX_COMMENT_LEN, min_len=1,
+        )
+        with self.db.lock:
+            track = self.db.data["tracks"].get(track_id)
+            if not track:
+                raise ApiError(404, "Трек не найден")
+            comment = {
+                "id": uuid.uuid4().hex[:10],
+                "track_id": track_id,
+                "user_id": user["id"],
+                "text": text,
+                "created_at": now_iso(),
+            }
+            self.db.data["comments"][comment["id"]] = comment
+            self.db.save()
+            count = comment_count_for_track(self.db, track_id)
+            result = public_comment(self.db, comment, user["id"], track["user_id"])
+        self.send_json(201, {"comment": result, "comment_count": count})
+
+    def api_delete_comment(self, comment_id: str) -> None:
+        user = self.require_user()
+        with self.db.lock:
+            comment = self.db.data["comments"].get(comment_id)
+            if not comment:
+                raise ApiError(404, "Комментарий не найден")
+            track = self.db.data["tracks"].get(comment.get("track_id"))
+            if not track:
+                del self.db.data["comments"][comment_id]
+                self.db.save()
+                return self.send_json(200, {"ok": True, "comment_count": 0})
+            if comment.get("user_id") != user["id"] and track["user_id"] != user["id"]:
+                raise ApiError(403, "Нельзя удалить этот комментарий")
+            del self.db.data["comments"][comment_id]
+            self.db.save()
+            count = comment_count_for_track(self.db, track["id"])
+        self.send_json(200, {"ok": True, "comment_count": count})
 
     @staticmethod
     def _remove_track_file(track: dict[str, Any]) -> None:
@@ -1013,9 +1492,9 @@ class VolnaHandler(BaseHTTPRequestHandler):
 def build_server(host: str, port: int) -> ThreadingHTTPServer:
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     db = Database(DB_PATH)
-    db.cleanup_sessions()
+    secret = load_or_create_secret(SECRET_PATH)
 
-    handler = type("BoundVolnaHandler", (VolnaHandler,), {"db": db})
+    handler = type("BoundVolnaHandler", (VolnaHandler,), {"db": db, "secret": secret})
     server = ThreadingHTTPServer((host, port), handler)
     server.daemon_threads = True
     return server
@@ -1038,7 +1517,7 @@ def main() -> None:
     if args.host in ("0.0.0.0", "::"):
         url = f"http://127.0.0.1:{args.port}/"
 
-    print("\n  Волна — локальный аудио-хостинг")
+    print(f"\n  Волна v{VERSION} — локальный аудио-хостинг")
     print(f"  Сайт:  {url}")
     print(f"  База:  {DB_PATH}")
     print(f"  Файлы: {UPLOAD_DIR}")
