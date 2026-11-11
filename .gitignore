@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# macOS / редакторы
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Пользовательские данные
+data/db.json
+data/uploads/*
+!data/uploads/.gitkeep
+
+# Логи и временные файлы
+*.log
+data/*.tmp

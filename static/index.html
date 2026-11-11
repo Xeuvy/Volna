@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#070812">
+  <meta name="description" content="Волна — локальный аудио-хостинг: слушайте и скачивайте треки без регистрации, загружайте свои.">
+  <title>Волна — аудио без границ</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="ambient" aria-hidden="true">
+    <span class="ambient-blob blob-one"></span>
+    <span class="ambient-blob blob-two"></span>
+    <span class="ambient-grid"></span>
+  </div>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#home" data-view-link="home" aria-label="Волна — на главную">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="28" height="28">
+            <rect x="2" y="12" width="3.4" height="8" rx="1.7" fill="currentColor"></rect>
+            <rect x="8" y="7" width="3.4" height="18" rx="1.7" fill="currentColor"></rect>
+            <rect x="14" y="3" width="3.4" height="26" rx="1.7" fill="currentColor"></rect>
+            <rect x="20" y="9" width="3.4" height="14" rx="1.7" fill="currentColor"></rect>
+            <rect x="26" y="13" width="3.4" height="6" rx="1.7" fill="currentColor"></rect>
+          </svg>
+        </span>
+        <span class="brand-text">Волна</span>
+      </a>
+
+      <nav class="main-nav" aria-label="Основная навигация">
+        <button class="nav-link is-active" data-view-link="home" type="button">Лента</button>
+        <button class="nav-link" data-view-link="upload" type="button">Загрузить</button>
+        <button class="nav-link" data-view-link="account" type="button">Кабинет</button>
+      </nav>
+
+      <div class="auth-area" id="authArea">
+        <button class="btn btn-ghost btn-sm" id="loginOpen" type="button">Войти</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="page">
+    <!-- ============================ ЛЕНТА ============================ -->
+    <section class="view is-active" id="view-home">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Локальный аудио-хостинг</p>
+          <h1>Звуки, которыми<br><span class="grad-text">хочется делиться</span></h1>
+          <p class="hero-lead">
+            Слушайте треки прямо на сайте — без регистрации и лишних кликов.
+            Понравилось? Скачайте файл бесплатно. Своя музыка? Загрузите и подпишите её.
+          </p>
+          <div class="hero-actions">
+            <button class="btn btn-primary" id="heroListen" type="button">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M8 5.14v13.72c0 .86.94 1.39 1.68.95l10.72-6.86a1.1 1.1 0 0 0 0-1.9L9.68 4.19A1.1 1.1 0 0 0 8 5.14Z" fill="currentColor"/></svg>
+              Слушать ленту
+            </button>
+            <button class="btn btn-ghost" data-action="go-upload" type="button">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 16V4m0 0 4.5 4.5M12 4 7.5 8.5M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Загрузить трек
+            </button>
+          </div>
+          <dl class="hero-stats">
+            <div><dt id="statTracksLabel">Треков</dt><dd id="statTracks">0</dd></div>
+            <div><dt id="statPlaysLabel">Прослушиваний</dt><dd id="statPlays">0</dd></div>
+            <div><dt id="statAuthorsLabel">Авторов</dt><dd id="statAuthors">0</dd></div>
+          </dl>
+        </div>
+
+        <div class="hero-visual" aria-hidden="true">
+          <div class="dj-setup">
+            <div class="deck">
+              <div class="deck-plinth">
+                <div class="deck-platter"></div>
+                <div class="vinyl">
+                  <span class="vinyl-sticker">45</span>
+                  <div class="vinyl-label">
+                    <span>VOLNA</span>
+                    <small>local sound</small>
+                  </div>
+                </div>
+                <div class="deck-arm"><span class="deck-cartridge"></span></div>
+                <div class="deck-controls">
+                  <span class="deck-led"></span>
+                  <span class="deck-start"></span>
+                  <span class="deck-pitch"><span></span></span>
+                </div>
+                <span class="deck-brand">VOLNA <b>SL-1</b></span>
+              </div>
+            </div>
+
+            <div class="mixer-scene">
+              <div class="mixer" id="mixer">
+                <div class="mixer-head">
+                  <div class="mixer-logo">VOLNA <b>PRO</b></div>
+                  <div class="mixer-display">
+                    <span class="display-text" id="mixerStatus">STANDBY</span>
+                    <span class="display-eq"><i></i><i></i><i></i><i></i><i></i></span>
+                  </div>
+                  <span class="mixer-power"></span>
+                </div>
+
+                <div class="mixer-main">
+                  <div class="channel">
+                    <div class="channel-head"><span>CH 1</span><i class="channel-led"></i></div>
+                    <div class="knob-grid">
+                      <div class="knob-cell"><div class="knob knob-a"><i></i></div><span>GAIN</span></div>
+                      <div class="knob-cell"><div class="knob knob-b"><i></i></div><span>HIGH</span></div>
+                      <div class="knob-cell"><div class="knob knob-c"><i></i></div><span>MID</span></div>
+                      <div class="knob-cell"><div class="knob knob-d"><i></i></div><span>LOW</span></div>
+                    </div>
+                    <div class="channel-bottom">
+                      <div class="fader">
+                        <div class="fader-track"><div class="fader-cap fader-a"></div></div>
+                        <span>LEVEL</span>
+                      </div>
+                      <div class="cue"><i></i><span>CUE</span></div>
+                    </div>
+                  </div>
+
+                  <div class="channel">
+                    <div class="channel-head"><span>CH 2</span><i class="channel-led amber"></i></div>
+                    <div class="knob-grid">
+                      <div class="knob-cell"><div class="knob knob-e"><i></i></div><span>GAIN</span></div>
+                      <div class="knob-cell"><div class="knob knob-f"><i></i></div><span>HIGH</span></div>
+                      <div class="knob-cell"><div class="knob knob-g"><i></i></div><span>MID</span></div>
+                      <div class="knob-cell"><div class="knob knob-h"><i></i></div><span>LOW</span></div>
+                    </div>
+                    <div class="channel-bottom">
+                      <div class="fader">
+                        <div class="fader-track"><div class="fader-cap fader-b"></div></div>
+                        <span>LEVEL</span>
+                      </div>
+                      <div class="cue"><i></i><span>CUE</span></div>
+                    </div>
+                  </div>
+
+                  <div class="master">
+                    <div class="master-head">MASTER</div>
+                    <div class="vu-wrap">
+                      <div class="vu-meter"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+                      <div class="vu-meter"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+                    </div>
+                    <div class="master-knob"><div class="knob knob-master"><i></i></div><span>LEVEL</span></div>
+                    <div class="phones">PHONES <i></i></div>
+                  </div>
+                </div>
+
+                <div class="mixer-foot">
+                  <span class="cross-label">A</span>
+                  <div class="crossfader"><div class="cross-track"><div class="cross-cap"></div></div></div>
+                  <span class="cross-label">B</span>
+                  <span class="mixer-model">PRO SERIES</span>
+                </div>
+
+                <span class="mixer-screw s1"></span>
+                <span class="mixer-screw s2"></span>
+                <span class="mixer-screw s3"></span>
+                <span class="mixer-screw s4"></span>
+              </div>
+              <div class="mixer-shadow"></div>
+            </div>
+          </div>
+
+          <div class="floating-note note-one">♪</div>
+          <div class="floating-note note-two">♫</div>
+          <div class="floating-note note-three">♬</div>
+        </div>
+      </section>
+
+      <section class="feed">
+        <div class="feed-head">
+          <div>
+            <h2>Лента звуков</h2>
+            <p class="muted" id="feedSubtitle">Свежие загрузки сообщества</p>
+          </div>
+          <div class="feed-tools">
+            <label class="search" for="searchInput">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m16.5 16.5 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+              <input id="searchInput" type="search" placeholder="Трек, автор, настроение…" autocomplete="off">
+            </label>
+          </div>
+        </div>
+
+        <div class="filter-row" id="filterRow" hidden>
+          <span class="filter-chip" id="authorFilterChip">
+            Автор: <strong id="authorFilterName"></strong>
+            <button type="button" id="clearAuthorFilter" aria-label="Сбросить фильтр">✕</button>
+          </span>
+        </div>
+
+        <div class="track-grid" id="trackGrid" aria-live="polite"></div>
+
+        <div class="empty-state" id="emptyState" hidden>
+          <div class="empty-icon">🎧</div>
+          <h3 id="emptyTitle">Пока тихо</h3>
+          <p id="emptyText">Здесь появятся треки — станьте первым, кто поделится звуком.</p>
+          <button class="btn btn-primary" data-action="go-upload" type="button">Загрузить трек</button>
+        </div>
+      </section>
+    </section>
+
+    <!-- ============================ ЗАГРУЗКА ============================ -->
+    <section class="view" id="view-upload" hidden>
+      <div class="page-head">
+        <div>
+          <p class="eyebrow">Новый звук</p>
+          <h1>Загрузить трек</h1>
+          <p class="muted">Файл появится в общей ленте: его смогут слушать и скачивать все.</p>
+        </div>
+      </div>
+
+      <form class="upload-layout" id="uploadForm" novalidate>
+        <div class="card upload-card">
+          <label class="dropzone" id="dropzone" for="fileInput">
+            <input type="file" id="fileInput" accept=".mp3,.wav,.ogg,.oga,.opus,.m4a,.mp4,.aac,.flac,.webm,audio/*" hidden>
+            <span class="dropzone-empty" id="dropzoneEmpty">
+              <span class="drop-icon">⬆</span>
+              <span class="drop-title">Перетащите аудио сюда</span>
+              <span class="drop-sub">или нажмите, чтобы выбрать файл</span>
+              <span class="drop-formats">MP3, WAV, OGG, M4A, FLAC, WEBM · до 80 МБ</span>
+            </span>
+            <span class="dropzone-file" id="dropzoneFile" hidden>
+              <span class="file-icon">🎵</span>
+              <span class="file-meta">
+                <span class="file-name" id="fileName">track.mp3</span>
+                <span class="file-size" id="fileSize">0 МБ</span>
+              </span>
+              <span class="file-change">Заменить</span>
+            </span>
+          </label>
+
+          <div class="field">
+            <label for="uploadTitle">Название <span class="req">*</span></label>
+            <input id="uploadTitle" name="title" type="text" maxlength="120" placeholder="Например, «Ночной город»" required>
+            <span class="field-hint"><span id="titleCount">0</span>/120</span>
+          </div>
+
+          <div class="field">
+            <label for="uploadDescription">Описание <span class="opt">необязательно</span></label>
+            <textarea id="uploadDescription" name="description" rows="4" maxlength="1000" placeholder="История трека, настроение, инструменты…"></textarea>
+          </div>
+
+          <div class="progress" id="uploadProgress" hidden>
+            <div class="progress-track"><div class="progress-bar" id="progressBar"></div></div>
+            <span id="progressLabel">0%</span>
+          </div>
+
+          <div class="form-actions">
+            <button class="btn btn-primary" id="uploadSubmit" type="submit">Опубликовать</button>
+            <button class="btn btn-ghost" id="uploadReset" type="reset">Очистить</button>
+          </div>
+        </div>
+
+        <aside class="upload-aside">
+          <div class="card tip-card">
+            <h3>Как это работает</h3>
+            <ol class="steps">
+              <li><span>1</span>Выберите аудиофайл и придумайте название.</li>
+              <li><span>2</span>Трек сразу появится в общей ленте.</li>
+              <li><span>3</span>Любой посетитель сможет слушать и скачать его бесплатно.</li>
+            </ol>
+          </div>
+          <div class="card tip-card subtle">
+            <h3>Хороший тон</h3>
+            <p>Загружайте только свою музыку или файлы, на которые у вас есть права. Название — единственное обязательное поле, но описание помогает слушателям найти трек.</p>
+          </div>
+        </aside>
+      </form>
+    </section>
+
+    <!-- ============================ КАБИНЕТ ============================ -->
+    <section class="view" id="view-account" hidden>
+      <div class="page-head">
+        <div>
+          <p class="eyebrow">Личное пространство</p>
+          <h1>Настройки аккаунта</h1>
+          <p class="muted">Профиль, доступ, пароль и ваши загруженные треки.</p>
+        </div>
+      </div>
+
+      <div class="account-layout">
+        <aside class="account-side">
+          <div class="card profile-preview">
+            <div class="avatar avatar-xl" id="accountAvatar">🎵</div>
+            <h2 id="accountDisplayName">—</h2>
+            <p class="handle" id="accountUsername">@—</p>
+            <p class="bio-preview" id="accountBio">—</p>
+            <div class="profile-stats">
+              <div><strong id="accountTracks">0</strong><span id="accountTracksLabel">треков</span></div>
+              <div><strong id="accountPlays">0</strong><span id="accountPlaysLabel">прослушиваний</span></div>
+              <div><strong id="accountDownloads">0</strong><span id="accountDownloadsLabel">скачиваний</span></div>
+            </div>
+            <p class="joined" id="accountJoined"></p>
+            <button class="btn btn-ghost btn-sm btn-block" id="logoutBtn" type="button">Выйти из аккаунта</button>
+          </div>
+        </aside>
+
+        <div class="account-main">
+          <section class="card settings-card">
+            <div class="card-head">
+              <h2>Профиль</h2>
+              <p class="muted">Так вас видят другие слушатели.</p>
+            </div>
+            <form id="profileForm" class="settings-form">
+              <div class="field">
+                <label for="settingsAvatar">Аватар</label>
+                <div class="avatar-editor">
+                  <div class="avatar avatar-md" id="avatarPreview">🎵</div>
+                  <input id="settingsAvatar" type="text" maxlength="8" placeholder="🎵" aria-label="Символ аватара">
+                  <div class="emoji-quick" id="emojiQuick">
+                    <button type="button" data-emoji="🎵">🎵</button>
+                    <button type="button" data-emoji="🎧">🎧</button>
+                    <button type="button" data-emoji="🎸">🎸</button>
+                    <button type="button" data-emoji="🎹">🎹</button>
+                    <button type="button" data-emoji="🎤">🎤</button>
+                    <button type="button" data-emoji="🌊">🌊</button>
+                    <button type="button" data-emoji="🌙">🌙</button>
+                    <button type="button" data-emoji="⚡">⚡</button>
+                  </div>
+                </div>
+              </div>
+              <div class="field">
+                <label for="settingsDisplayName">Отображаемое имя</label>
+                <input id="settingsDisplayName" type="text" maxlength="40" placeholder="Как вас называть">
+              </div>
+              <div class="field">
+                <label for="settingsBio">О себе <span class="opt">до 300 символов</span></label>
+                <textarea id="settingsBio" rows="3" maxlength="300" placeholder="Пара слов о вашей музыке"></textarea>
+              </div>
+              <div class="field">
+                <label for="settingsAccent">Акцентный цвет</label>
+                <div class="color-row">
+                  <input id="settingsAccent" type="color" value="#8b5cf6" aria-label="Акцентный цвет">
+                  <span class="color-value" id="accentValue">#8b5cf6</span>
+                  <div class="swatches" id="accentSwatches">
+                    <button type="button" data-color="#8b5cf6" style="--sw:#8b5cf6" aria-label="Фиолетовый"></button>
+                    <button type="button" data-color="#22d3ee" style="--sw:#22d3ee" aria-label="Голубой"></button>
+                    <button type="button" data-color="#34d399" style="--sw:#34d399" aria-label="Зелёный"></button>
+                    <button type="button" data-color="#fb7185" style="--sw:#fb7185" aria-label="Розовый"></button>
+                    <button type="button" data-color="#fbbf24" style="--sw:#fbbf24" aria-label="Жёлтый"></button>
+                    <button type="button" data-color="#f472b6" style="--sw:#f472b6" aria-label="Малиновый"></button>
+                  </div>
+                </div>
+              </div>
+              <div class="form-actions">
+                <button class="btn btn-primary" type="submit">Сохранить профиль</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="card settings-card">
+            <div class="card-head">
+              <h2>Аккаунт</h2>
+              <p class="muted">Уникальное имя и контактный email.</p>
+            </div>
+            <form id="accountForm" class="settings-form">
+              <div class="field">
+                <label for="settingsUsername">Имя пользователя</label>
+                <div class="input-prefix">
+                  <span>@</span>
+                  <input id="settingsUsername" type="text" maxlength="24" autocomplete="username" required>
+                </div>
+                <span class="field-hint">3–24 символа: буквы, цифры, «_», «-», «.»</span>
+              </div>
+              <div class="field">
+                <label for="settingsEmail">Email <span class="opt">необязательно</span></label>
+                <input id="settingsEmail" type="email" maxlength="254" autocomplete="email" placeholder="you@example.com">
+              </div>
+              <div class="field">
+                <label for="accountCurrentPassword">Текущий пароль <span class="req">*</span></label>
+                <input id="accountCurrentPassword" type="password" autocomplete="current-password" placeholder="Нужен для смены имени">
+              </div>
+              <div class="form-actions">
+                <button class="btn btn-primary" type="submit">Сохранить аккаунт</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="card settings-card">
+            <div class="card-head">
+              <h2>Пароль</h2>
+              <p class="muted">После смены пароля другие сеансы будут завершены.</p>
+            </div>
+            <form id="passwordForm" class="settings-form">
+              <div class="field">
+                <label for="passwordCurrent">Текущий пароль <span class="req">*</span></label>
+                <input id="passwordCurrent" type="password" autocomplete="current-password" required>
+              </div>
+              <div class="field-row">
+                <div class="field">
+                  <label for="passwordNew">Новый пароль <span class="req">*</span></label>
+                  <input id="passwordNew" type="password" autocomplete="new-password" minlength="6" required>
+                </div>
+                <div class="field">
+                  <label for="passwordRepeat">Повторите пароль <span class="req">*</span></label>
+                  <input id="passwordRepeat" type="password" autocomplete="new-password" minlength="6" required>
+                </div>
+              </div>
+              <div class="form-actions">
+                <button class="btn btn-primary" type="submit">Сменить пароль</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="card settings-card">
+            <div class="card-head">
+              <h2>Мои треки</h2>
+              <p class="muted">Переименовать, послушать или удалить загрузку.</p>
+            </div>
+            <div class="my-tracks" id="myTracks"></div>
+          </section>
+
+          <section class="card settings-card danger-card">
+            <div class="card-head">
+              <h2>Удаление аккаунта</h2>
+              <p class="muted">Аккаунт и все ваши треки будут удалены безвозвратно.</p>
+            </div>
+            <form id="deleteForm" class="settings-form">
+              <div class="field">
+                <label for="deletePassword">Пароль для подтверждения</label>
+                <input id="deletePassword" type="password" autocomplete="current-password" placeholder="Введите пароль">
+              </div>
+              <div class="form-actions">
+                <button class="btn btn-danger" type="submit">Удалить аккаунт навсегда</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>Волна · локальный аудио-хостинг</span>
+    <span class="footer-sep">·</span>
+    <span>Данные хранятся в <code>data/db.json</code></span>
+  </footer>
+
+  <audio id="audio" preload="metadata"></audio>
+
+  <div class="player" id="playerBar" aria-label="Аудиоплеер">
+    <div class="player-cover" id="playerCover">🎵</div>
+    <div class="player-info">
+      <div class="player-title" id="playerTitle">Трек не выбран</div>
+      <button class="player-author" id="playerAuthor" type="button">—</button>
+    </div>
+    <button class="play-pause" id="playPause" type="button" aria-label="Играть">
+      <svg class="icon-play" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M8 5.14v13.72c0 .86.94 1.39 1.68.95l10.72-6.86a1.1 1.1 0 0 0 0-1.9L9.68 4.19A1.1 1.1 0 0 0 8 5.14Z" fill="currentColor"/></svg>
+      <svg class="icon-pause" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="6" y="4" width="4.2" height="16" rx="1.5" fill="currentColor"/><rect x="13.8" y="4" width="4.2" height="16" rx="1.5" fill="currentColor"/></svg>
+    </button>
+    <div class="player-timeline">
+      <span id="timeCurrent">0:00</span>
+      <input class="range" id="seekBar" type="range" min="0" max="1000" value="0" step="1" aria-label="Позиция воспроизведения">
+      <span id="timeTotal">0:00</span>
+    </div>
+    <div class="player-volume">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4Z" fill="currentColor"/><path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      <input class="range" id="volumeBar" type="range" min="0" max="100" value="100" aria-label="Громкость">
+    </div>
+    <a class="player-download" id="playerDownload" href="#" aria-label="Скачать трек" title="Скачать бесплатно">
+      <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M12 4v11m0 0 4-4m-4 4-4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </a>
+    <button class="player-close" id="playerClose" type="button" aria-label="Закрыть плеер">✕</button>
+  </div>
+
+  <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+
+  <!-- ============================ МОДАЛ: ВХОД ============================ -->
+  <div class="modal" id="authModal" hidden>
+    <div class="modal-backdrop" data-close-auth="1"></div>
+    <div class="modal-card auth-card" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+      <button class="modal-close" type="button" data-close-auth="1" aria-label="Закрыть">✕</button>
+      <div class="brand brand-center" aria-hidden="true">
+        <span class="brand-mark">
+          <svg viewBox="0 0 32 32" width="26" height="26">
+            <rect x="2" y="12" width="3.4" height="8" rx="1.7" fill="currentColor"></rect>
+            <rect x="8" y="7" width="3.4" height="18" rx="1.7" fill="currentColor"></rect>
+            <rect x="14" y="3" width="3.4" height="26" rx="1.7" fill="currentColor"></rect>
+            <rect x="20" y="9" width="3.4" height="14" rx="1.7" fill="currentColor"></rect>
+            <rect x="26" y="13" width="3.4" height="6" rx="1.7" fill="currentColor"></rect>
+          </svg>
+        </span>
+        <span class="brand-text">Волна</span>
+      </div>
+      <h2 id="authTitle">С возвращением</h2>
+      <p class="muted auth-subtitle" id="authSubtitle">Войдите, чтобы загружать треки и настраивать профиль.</p>
+
+      <div class="segmented" role="tablist" aria-label="Вход или регистрация">
+        <button class="seg-btn is-active" type="button" role="tab" aria-selected="true" data-auth-tab="login">Вход</button>
+        <button class="seg-btn" type="button" role="tab" aria-selected="false" data-auth-tab="register">Регистрация</button>
+      </div>
+
+      <form class="auth-form" id="loginForm">
+        <div class="field">
+          <label for="loginUsername">Имя пользователя</label>
+          <input id="loginUsername" name="username" type="text" autocomplete="username" required>
+        </div>
+        <div class="field">
+          <label for="loginPassword">Пароль</label>
+          <input id="loginPassword" name="password" type="password" autocomplete="current-password" required>
+        </div>
+        <button class="btn btn-primary btn-block" type="submit">Войти</button>
+      </form>
+
+      <form class="auth-form" id="registerForm" hidden>
+        <div class="field">
+          <label for="registerUsername">Имя пользователя</label>
+          <input id="registerUsername" name="username" type="text" maxlength="24" autocomplete="username" placeholder="wave_lover" required>
+          <span class="field-hint">3–24 символа, без пробелов</span>
+        </div>
+        <div class="field">
+          <label for="registerDisplayName">Отображаемое имя <span class="opt">необязательно</span></label>
+          <input id="registerDisplayName" name="display_name" type="text" maxlength="40" autocomplete="nickname" placeholder="Как вас называть">
+        </div>
+        <div class="field">
+          <label for="registerPassword">Пароль</label>
+          <input id="registerPassword" name="password" type="password" autocomplete="new-password" minlength="6" placeholder="Минимум 6 символов" required>
+        </div>
+        <button class="btn btn-primary btn-block" type="submit">Создать аккаунт</button>
+      </form>
+
+      <p class="auth-note">Слушать и скачивать можно без аккаунта. Аккаунт нужен для загрузки и настроек.</p>
+    </div>
+  </div>
+
+  <!-- ============================ МОДАЛ: РЕДАКТИРОВАНИЕ ============================ -->
+  <div class="modal" id="editModal" hidden>
+    <div class="modal-backdrop" data-close-edit="1"></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="editTitle">
+      <button class="modal-close" type="button" data-close-edit="1" aria-label="Закрыть">✕</button>
+      <h2 id="editTitle">Редактировать трек</h2>
+      <p class="muted auth-subtitle">Название видно всем в ленте.</p>
+      <form id="editForm" class="auth-form">
+        <div class="field">
+          <label for="editTrackTitle">Название</label>
+          <input id="editTrackTitle" type="text" maxlength="120" required>
+        </div>
+        <div class="field">
+          <label for="editTrackDescription">Описание</label>
+          <textarea id="editTrackDescription" rows="4" maxlength="1000"></textarea>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-ghost" type="button" data-close-edit="1">Отмена</button>
+          <button class="btn btn-primary" type="submit">Сохранить</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
